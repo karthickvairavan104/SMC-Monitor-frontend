@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SMC Live Monitor</title>
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      body { background: #010409; color: #d8e8ff; font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- Ensure `global` exists for libraries that expect Node's global (sockjs-client) -->
+    <script>if (typeof global === 'undefined') { window.global = window; }</script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
