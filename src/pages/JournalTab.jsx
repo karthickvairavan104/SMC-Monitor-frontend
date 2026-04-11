@@ -1,100 +1,474 @@
+import { useState, useMemo, useCallback } from 'react';
 import useStore from '../store/useStore';
-import { Pill } from '../components/Atoms';
-import { T, gc, fmtDate, fmtTime } from '../utils/format';
+import { Pill, ScoreRing } from '../components/Atoms';
+import { T, fa, md, gc, fmtDate, fmtTime } from '../utils/format';
 import { Journal } from '../api/endpoints';
 import toast from 'react-hot-toast';
 
+// ── constants ──────────────────────────────────────────────────────────────
+const PER_PAGE = 50;
+
+const OUTCOME_COL = { win: T.accent, partial: T.yellow, loss: T.red };
+const DIR_COL     = { BUY: T.accent, SELL: T.red };
+
+// ── helpers ────────────────────────────────────────────────────────────────
+function fmtPrice(v, pair) {
+  if (v == null || isNaN(v)) return '–';
+  const dp = (pair?.includes('JPY') || pair === 'XAU/USD' || pair === 'NAS100') ? 2 : 4;
+  return Number(v).toFixed(dp);
+}
+
+function validateSLTP(trade) {
+  const { entry, sl, tp1, isBull } = trade;
+  if (entry == null || sl == null || tp1 == null) return null;
+  if (isBull) {
+    if (sl >= entry)  return 'SL above entry';
+    if (tp1 <= entry) return 'TP below entry';
+  } else {
+    if (sl <= entry)  return 'SL below entry';
+    if (tp1 >= entry) return 'TP above entry';
+  }
+  return null;
+}
+
+function toDateInput(d) {
+  if (!d) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+
+function fromDateInput(s, endOfDay = false) {
+  if (!s) return null;
+  const d = new Date(s);
+  if (endOfDay) d.setHours(23, 59, 59, 999);
+  return d;
+}
+
+// ── SortHeader ─────────────────────────────────────────────────────────────
+function SortTH({ col, label, sortCol, sortDir, onSort, style = {} }) {
+  const active = sortCol === col;
+  return (
+    <th
+      onClick={() => onSort(col)}
+      style={{
+        padding: '7px 10px', textAlign: 'left', fontSize: 7,
+        color: active ? T.accent : T.muted,
+        whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none',
+        letterSpacing: '0.08em',
+        ...style,
+      }}
+    >
+      {label}
+      {active && <span style={{ marginLeft: 3, opacity: 0.7 }}>{sortDir === 1 ? '↑' : '↓'}</span>}
+    </th>
+  );
+}
+
+// ── StatCard ───────────────────────────────────────────────────────────────
+function StatCard({ label, value, color = T.text, sub }) {
+  return (
+    <div style={{
+      background: T.card, border: `1px solid ${T.border}`,
+      borderRadius: 8, padding: '9px 12px', minWidth: 90,
+    }}>
+      <div style={{ fontSize: 7, color: T.muted, letterSpacing: '0.1em', marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color, lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 7, color: T.muted, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+// ── FilterSelect ───────────────────────────────────────────────────────────
+function FilterSelect({ label, value, onChange, options }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <div style={{ fontSize: 7, color: T.muted, letterSpacing: '0.08em' }}>{label}</div>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        style={{
+          height: 28, padding: '0 8px', borderRadius: 5,
+          background: T.dim, color: T.text,
+          border: `1px solid ${T.border}`,
+          fontFamily: 'inherit', fontSize: 9, cursor: 'pointer',
+        }}
+      >
+        {options.map(o => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+// ── DateInput ──────────────────────────────────────────────────────────────
+function DateInput({ label, value, onChange }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 140 }}>
+      <div style={{ fontSize: 7, color: T.muted, letterSpacing: '0.08em' }}>
+        {label}
+      </div>
+
+      <input
+        type="date"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        style={{
+          height: 28,
+          padding: '0 8px',
+          borderRadius: 5,
+
+          // ✅ FIXED VISIBILITY
+          background: '#111',
+          color: '#fff',
+          border: '1px solid #444',
+
+          fontFamily: 'inherit',
+          fontSize: 9,
+          cursor: 'pointer',
+          outline: 'none',
+          colorScheme: 'dark',
+          width: '100%'
+        }}
+      />
+    </div>
+  );
+}
+
+// ── Main Component ─────────────────────────────────────────────────────────
 export default function JournalTab() {
   const { journal, setJournal } = useStore();
 
-  async function handleClear() {
+  // ── filter state ──────────────────────────────────────────────────────
+  const [fromStr, setFromStr] = useState('');
+  const [toStr,   setToStr]   = useState('');
+  const [dirF,    setDirF]    = useState('');
+  const [outF,    setOutF]    = useState('');
+  const [pairF,   setPairF]   = useState('');
+  const [gradeF,  setGradeF]  = useState('');
+  const [validF,  setValidF]  = useState('');
+
+  // ── sort state ────────────────────────────────────────────────────────
+  const [sortCol, setSortCol] = useState('date');
+  const [sortDir, setSortDir] = useState(-1);
+
+  // ── pagination ────────────────────────────────────────────────────────
+  const [page, setPage] = useState(1);
+
+  // ── derived data ──────────────────────────────────────────────────────
+  const pairs  = useMemo(() => [...new Set(journal.map(j => j.pair))].sort(), [journal]);
+  const grades = useMemo(() => [...new Set(journal.map(j => j.grade).filter(Boolean))].sort(), [journal]);
+
+  const fromDate = useMemo(() => fromDateInput(fromStr, false), [fromStr]);
+  const toDate   = useMemo(() => fromDateInput(toStr, true),    [toStr]);
+
+  const filtered = useMemo(() => {
+    let rows = journal.map(j => ({ ...j, _invalid: validateSLTP(j) }));
+
+    if (fromDate) rows = rows.filter(j => new Date(j.createdAt) >= fromDate);
+    if (toDate)   rows = rows.filter(j => new Date(j.createdAt) <= toDate);
+    if (dirF)     rows = rows.filter(j => (j.isBull ? 'BUY' : 'SELL') === dirF);
+    if (outF)     rows = rows.filter(j => j.outcome === outF);
+    if (pairF)    rows = rows.filter(j => j.pair === pairF);
+    if (gradeF)   rows = rows.filter(j => j.grade === gradeF);
+    if (validF === 'invalid') rows = rows.filter(j => j._invalid);
+    if (validF === 'valid')   rows = rows.filter(j => !j._invalid);
+
+    // sort
+    rows.sort((a, b) => {
+      let av, bv;
+      switch (sortCol) {
+        case 'date':    av = new Date(a.createdAt).getTime(); bv = new Date(b.createdAt).getTime(); break;
+        case 'pair':    av = a.pair;      bv = b.pair;      break;
+        case 'score':   av = a.score;     bv = b.score;     break;
+        case 'pnl':     av = a.pnl ?? 0;  bv = b.pnl ?? 0;  break;
+        case 'outcome': av = a.outcome;   bv = b.outcome;   break;
+        case 'entry':   av = a.entry;     bv = b.entry;     break;
+        default: return 0;
+      }
+      if (typeof av === 'string') return sortDir * av.localeCompare(bv);
+      return sortDir * (av - bv);
+    });
+    return rows;
+  }, [journal, fromDate, toDate, dirF, outF, pairF, gradeF, validF, sortCol, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
+  const safePage   = Math.min(page, totalPages);
+  const pageRows   = filtered.slice((safePage - 1) * PER_PAGE, safePage * PER_PAGE);
+
+  // ── stats ─────────────────────────────────────────────────────────────
+  const stats = useMemo(() => {
+    const wins    = filtered.filter(j => j.outcome === 'win').length;
+    const losses  = filtered.filter(j => j.outcome === 'loss').length;
+    const partial = filtered.filter(j => j.outcome === 'partial').length;
+    const closed  = wins + losses;
+    const wr      = closed ? (wins / closed * 100).toFixed(1) : '–';
+    const totalPnl = filtered.reduce((s, j) => s + (j.pnl ?? 0), 0);
+    const avgScore = filtered.length
+      ? (filtered.reduce((s, j) => s + (j.score ?? 0), 0) / filtered.length).toFixed(1) : '–';
+    const invalid  = filtered.filter(j => j._invalid).length;
+    return { wins, losses, partial, wr, totalPnl, avgScore, invalid, total: filtered.length };
+  }, [filtered]);
+
+  // ── handlers ──────────────────────────────────────────────────────────
+  const handleSort = useCallback(col => {
+    setSortCol(prev => {
+      if (prev === col) setSortDir(d => d * -1);
+      else { setSortDir(-1); }
+      return col;
+    });
+    setPage(1);
+  }, []);
+
+  const resetFilters = () => {
+    setFromStr(''); setToStr('');
+    setDirF(''); setOutF(''); setPairF(''); setGradeF(''); setValidF('');
+    setPage(1);
+  };
+
+  const handleClear = async () => {
     if (!confirm('Clear all journal entries?')) return;
     try {
       await Journal.clear();
       setJournal([]);
       toast.success('Journal cleared');
     } catch { toast.error('Failed to clear journal'); }
-  }
+  };
 
-  function exportCSV() {
-    const rows = [
-      ['DATE','PAIR','DIR','ENTRY','SL','TP1','TP2','SCORE','GRADE','SESSION','OUTCOME','P&L','KELLY%','CLOSE TYPE'].join(','),
-      ...journal.map(j => [
-        fmtDate(j.createdAt), j.pair, j.isBull ? 'BUY' : 'SELL',
-        j.entry, j.sl, j.tp1, j.tp2, j.score, j.grade,
-        j.session ?? '-', j.outcome ?? '-',
-        j.pnl ?? 0, j.kellyPct ?? '-',
-        j.autoClose ? 'AUTO' : 'Manual',
-      ].join(','))
-    ];
-    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+  // Client-side CSV export (honours active filters)
+  const exportCSV = () => {
+    if (!filtered.length) return;
+    const header = ['DATE','PAIR','DIR','ENTRY','SL','TP1','TP2','SCORE','GRADE','SESSION','OUTCOME','P&L','KELLY%','CLOSE TYPE','VALID'].join(',');
+    const rows = filtered.map(j => [
+      fmtDate(j.createdAt),
+      j.pair,
+      j.isBull ? 'BUY' : 'SELL',
+      fmtPrice(j.entry, j.pair),
+      fmtPrice(j.sl,    j.pair),
+      fmtPrice(j.tp1,   j.pair),
+      fmtPrice(j.tp2,   j.pair),
+      j.score ?? '',
+      j.grade ?? '',
+      j.session ?? '',
+      j.outcome ?? '',
+      j.pnl != null ? j.pnl.toFixed(2) : '',
+      j.kellyPct != null ? j.kellyPct : '',
+      j.autoClose ? 'AUTO' : 'Manual',
+      j._invalid ? j._invalid : 'OK',
+    ].join(','));
+    const blob = new Blob([[header, ...rows].join('\n')], { type: 'text/csv' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
-    a.href = url; a.download = `smc_journal_${Date.now()}.csv`; a.click();
+    const range = (fromStr || toStr) ? `_${fromStr || 'start'}_to_${toStr || 'end'}` : '';
+    a.href = url;
+    a.download = `smc_journal${range}_${Date.now()}.csv`;
+    a.click();
     URL.revokeObjectURL(url);
-  }
+  };
 
-  const outcomeColor = o => o === 'win' ? T.accent : o === 'partial' ? T.yellow : o === 'loss' ? T.red : T.muted;
+  const hasFilters = fromStr || toStr || dirF || outF || pairF || gradeF || validF;
 
+  // ── render ─────────────────────────────────────────────────────────────
   return (
     <div>
-      <div style={{ display: 'flex', gap: 10, marginBottom: 12, alignItems: 'center' }}>
-        <div style={{ fontSize: 9, color: T.muted }}>{journal.length} entries</div>
-        <button onClick={exportCSV} disabled={!journal.length}
-          style={{ marginLeft: 'auto', padding: '6px 14px', borderRadius: 6, background: 'transparent', color: T.blue, border: `1px solid ${T.blue}55`, fontFamily: 'monospace', fontSize: 9, cursor: 'pointer', fontWeight: 700 }}>
-          ↓ Export CSV
-        </button>
-        <button onClick={handleClear}
-          style={{ padding: '6px 12px', borderRadius: 6, background: 'transparent', color: T.red, border: `1px solid ${T.red}44`, fontFamily: 'monospace', fontSize: 9, cursor: 'pointer' }}>
-          Clear
-        </button>
+
+      {/* ── Stats bar ─────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+        <StatCard label="TOTAL TRADES" value={stats.total} color={T.text} />
+        <StatCard
+          label="WIN RATE"
+          value={stats.wr === '–' ? '–' : `${stats.wr}%`}
+          color={stats.wr !== '–' ? (stats.wr >= 50 ? T.accent : T.red) : T.muted}
+          sub={`${stats.wins}W · ${stats.losses}L · ${stats.partial}P`}
+        />
+        <StatCard
+          label="TOTAL P&L"
+          value={stats.totalPnl >= 0 ? `+$${stats.totalPnl.toFixed(2)}` : `-$${Math.abs(stats.totalPnl).toFixed(2)}`}
+          color={stats.totalPnl > 0 ? T.accent : stats.totalPnl < 0 ? T.red : T.muted}
+        />
+        <StatCard label="AVG SCORE"  value={stats.avgScore} color={T.blue} />
+        <StatCard
+          label="INVALID SL/TP"
+          value={stats.invalid}
+          color={stats.invalid > 0 ? T.red : T.accent}
+          sub={stats.invalid > 0 ? 'click Valid filter ↓' : 'all clean'}
+        />
       </div>
 
-      {journal.length === 0 && (
-        <div style={{ textAlign: 'center', padding: 60, color: T.muted, fontSize: 12 }}>
-          No trades logged yet.
+      {/* ── Toolbar ───────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end', marginBottom: 12 }}>
+        <DateInput label="FROM" value={fromStr} onChange={v => { setFromStr(v); setPage(1); }} />
+        <DateInput label="TO"   value={toStr}   onChange={v => { setToStr(v);   setPage(1); }} />
+
+        <FilterSelect label="DIRECTION" value={dirF} onChange={v => { setDirF(v); setPage(1); }}
+          options={[{value:'',label:'All dirs'},{value:'BUY',label:'BUY'},{value:'SELL',label:'SELL'}]} />
+
+        <FilterSelect label="OUTCOME" value={outF} onChange={v => { setOutF(v); setPage(1); }}
+          options={[{value:'',label:'All outcomes'},{value:'win',label:'Win'},{value:'loss',label:'Loss'},{value:'partial',label:'Partial'}]} />
+
+        <FilterSelect label="PAIR" value={pairF} onChange={v => { setPairF(v); setPage(1); }}
+          options={[{value:'',label:'All pairs'}, ...pairs.map(p => ({value:p,label:p}))]} />
+
+        <FilterSelect label="GRADE" value={gradeF} onChange={v => { setGradeF(v); setPage(1); }}
+          options={[{value:'',label:'All grades'}, ...grades.map(g => ({value:g,label:g}))]} />
+
+        <FilterSelect label="VALID" value={validF} onChange={v => { setValidF(v); setPage(1); }}
+          options={[{value:'',label:'All'},{value:'valid',label:'✓ Valid'},{value:'invalid',label:'✗ Invalid'}]} />
+
+        {hasFilters && (
+          <button onClick={resetFilters} style={{
+            alignSelf: 'flex-end', height: 28, padding: '0 10px', borderRadius: 5,
+            background: 'transparent', color: T.muted, border: `1px solid ${T.border}`,
+            fontFamily: 'inherit', fontSize: 9, cursor: 'pointer',
+          }}>Reset</button>
+        )}
+
+        {/* spacer */}
+        <div style={{ flex: 1 }} />
+
+        <button onClick={exportCSV} disabled={!filtered.length} style={{
+          alignSelf: 'flex-end', height: 28, padding: '0 12px', borderRadius: 5,
+          background: 'transparent', color: T.blue,
+          border: `1px solid ${T.blue}55`,
+          fontFamily: 'inherit', fontSize: 9, cursor: 'pointer', fontWeight: 700,
+          opacity: filtered.length ? 1 : 0.4,
+          display: 'flex', alignItems: 'center', gap: 5,
+        }}>
+          <span>↓</span> Export CSV {fromStr || toStr ? '(range)' : `(${filtered.length})`}
+        </button>
+
+        <button onClick={handleClear} style={{
+          alignSelf: 'flex-end', height: 28, padding: '0 10px', borderRadius: 5,
+          background: 'transparent', color: T.red,
+          border: `1px solid ${T.red}44`,
+          fontFamily: 'inherit', fontSize: 9, cursor: 'pointer',
+        }}>Clear All</button>
+      </div>
+
+      {/* ── Table ─────────────────────────────────────────────────────── */}
+      {filtered.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: 60, color: T.muted, fontSize: 11 }}>
+          {journal.length === 0 ? 'No trades logged yet.' : 'No trades match the current filters.'}
         </div>
-      )}
+      ) : (
+        <>
+          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 9 }}>
+                <thead style={{ background: T.dim }}>
+                  <tr>
+                    <SortTH col="date"    label="DATE"    {...{sortCol, sortDir, onSort: handleSort}} />
+                    <SortTH col="pair"    label="PAIR"    {...{sortCol, sortDir, onSort: handleSort}} />
+                    <th style={{ padding: '7px 10px', fontSize: 7, color: T.muted, whiteSpace: 'nowrap' }}>DIR</th>
+                    <SortTH col="entry"   label="ENTRY"   {...{sortCol, sortDir, onSort: handleSort}} />
+                    <th style={{ padding: '7px 10px', fontSize: 7, color: T.muted }}>SL</th>
+                    <th style={{ padding: '7px 10px', fontSize: 7, color: T.muted }}>TP1</th>
+                    <th style={{ padding: '7px 10px', fontSize: 7, color: T.muted }}>TP2</th>
+                    <SortTH col="score"   label="SCORE"   {...{sortCol, sortDir, onSort: handleSort}} />
+                    <th style={{ padding: '7px 10px', fontSize: 7, color: T.muted }}>GRADE</th>
+                    <th style={{ padding: '7px 10px', fontSize: 7, color: T.muted }}>SESSION</th>
+                    <SortTH col="outcome" label="OUTCOME" {...{sortCol, sortDir, onSort: handleSort}} />
+                    <SortTH col="pnl"     label="P&L"     {...{sortCol, sortDir, onSort: handleSort}} />
+                    <th style={{ padding: '7px 10px', fontSize: 7, color: T.muted }}>KELLY%</th>
+                    <th style={{ padding: '7px 10px', fontSize: 7, color: T.muted }}>CLOSE</th>
+                    <th style={{ padding: '7px 10px', fontSize: 7, color: T.muted }}>VALID</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pageRows.map((j, k) => {
+                    const dir       = j.isBull ? 'BUY' : 'SELL';
+                    const pnlColor  = (j.pnl ?? 0) > 0 ? T.accent : (j.pnl ?? 0) < 0 ? T.red : T.muted;
+                    const invalid   = j._invalid;
+                    const rowBorder = invalid
+                      ? `1px solid ${T.red}18`
+                      : `1px solid ${T.border}10`;
+                    return (
+                      <tr key={j.id ?? k} style={{ borderBottom: rowBorder, background: invalid ? `${T.red}06` : 'transparent' }}>
+                        <td style={{ padding: '7px 10px', color: T.muted, fontSize: 8, whiteSpace: 'nowrap' }}>
+                          {fmtDate(j.createdAt)}<br />
+                          <span style={{ fontSize: 7, opacity: 0.6 }}>{fmtTime(j.createdAt)}</span>
+                        </td>
+                        <td style={{ padding: '7px 10px', fontWeight: 700, color: T.text }}>{j.pair}</td>
+                        <td style={{ padding: '7px 10px', color: DIR_COL[dir], fontWeight: 700 }}>
+                          {j.isBull ? '▲' : '▼'} {dir}
+                        </td>
+                        <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 8 }}>{fmtPrice(j.entry, j.pair)}</td>
+                        <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 8, color: invalid ? T.red : T.muted }}>
+                          {fmtPrice(j.sl, j.pair)}
+                        </td>
+                        <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 8, color: invalid ? T.red : T.muted }}>
+                          {fmtPrice(j.tp1, j.pair)}
+                        </td>
+                        <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 8, color: T.muted }}>
+                          {fmtPrice(j.tp2, j.pair)}
+                        </td>
+                        <td style={{ padding: '7px 10px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <div style={{ width: `${(j.score / 20) * 36}px`, height: 3, background: gc(j.grade), borderRadius: 2 }} />
+                            <span style={{ fontSize: 8, color: gc(j.grade) }}>{j.score?.toFixed(1)}</span>
+                          </div>
+                        </td>
+                        <td style={{ padding: '7px 10px' }}><Pill label={j.grade} color={gc(j.grade)} sz={8} /></td>
+                        <td style={{ padding: '7px 10px', color: T.muted, fontSize: 8 }}>{j.session ?? '–'}</td>
+                        <td style={{ padding: '7px 10px', color: OUTCOME_COL[j.outcome] ?? T.muted, fontWeight: 700 }}>
+                          {j.outcome?.toUpperCase() ?? '–'}
+                        </td>
+                        <td style={{ padding: '7px 10px', color: pnlColor, fontWeight: 700 }}>
+                          {j.pnl != null ? `${j.pnl >= 0 ? '+' : ''}$${j.pnl.toFixed ? j.pnl.toFixed(2) : j.pnl}` : '–'}
+                        </td>
+                        <td style={{ padding: '7px 10px', color: T.muted, fontSize: 8 }}>
+                          {j.kellyPct != null ? `${j.kellyPct}%` : '–'}
+                        </td>
+                        <td style={{ padding: '7px 10px' }}>
+                          {j.autoClose
+                            ? <span title={j.closeReason ?? ''} style={{ fontSize: 7, padding: '2px 6px', borderRadius: 3, background: fa(T.blue), color: T.blue, border: `1px solid ${T.blue}44`, fontWeight: 700, cursor: 'help' }}>AUTO</span>
+                            : <span style={{ fontSize: 7, color: T.muted }}>Manual</span>}
+                        </td>
+                        <td style={{ padding: '7px 10px' }}>
+                          {invalid
+                            ? (
+                              <span title={invalid} style={{
+                                fontSize: 7, padding: '2px 6px', borderRadius: 3,
+                                background: fa(T.red), color: T.red,
+                                border: `1px solid ${T.red}44`,
+                                fontWeight: 700, cursor: 'help', whiteSpace: 'nowrap',
+                              }}>✗ {invalid}</span>
+                            ) : (
+                              <span style={{ fontSize: 9, color: T.accent }}>✓</span>
+                            )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
 
-      <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 9 }}>
-          <thead style={{ background: T.dim }}>
-            <tr>
-              {['DATE','PAIR','DIR','ENTRY','SCORE','GRADE','SESSION','OUTCOME','P&L','KELLY%','CLOSE'].map(h => (
-                <th key={h} style={{ padding: '8px 10px', textAlign: 'left', fontSize: 7, color: T.muted, whiteSpace: 'nowrap' }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {journal.map((j, k) => (
-              <tr key={k} style={{ borderBottom: `1px solid ${T.border}10` }}>
-                <td style={{ padding: '7px 10px', color: T.muted, fontSize: 8 }}>{fmtDate(j.createdAt)} {fmtTime(j.createdAt)}</td>
-                <td style={{ padding: '7px 10px', fontWeight: 700, color: T.text }}>{j.pair}</td>
-                <td style={{ padding: '7px 10px', color: j.isBull ? T.accent : T.red, fontWeight: 700 }}>{j.isBull ? '▲ BUY' : '▼ SELL'}</td>
-                <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 8 }}>{j.entry}</td>
-                <td style={{ padding: '7px 10px', minWidth: 70 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <div style={{ width: `${(j.score / 20) * 40}px`, height: 4, background: gc(j.grade), borderRadius: 2 }} />
-                    <span style={{ fontSize: 8, color: gc(j.grade) }}>{j.score?.toFixed(1)}</span>
-                  </div>
-                </td>
-                <td style={{ padding: '7px 10px' }}><Pill label={j.grade} color={gc(j.grade)} sz={8} /></td>
-                <td style={{ padding: '7px 10px', color: T.muted, fontSize: 8 }}>{j.session ?? '-'}</td>
-                <td style={{ padding: '7px 10px', color: outcomeColor(j.outcome), fontWeight: 700 }}>{j.outcome?.toUpperCase() ?? '–'}</td>
-                <td style={{ padding: '7px 10px', color: (j.pnl ?? 0) >= 0 ? T.accent : T.red, fontWeight: 700 }}>
-                  {j.pnl != null ? `${j.pnl >= 0 ? '+' : ''}$${j.pnl}` : '–'}
-                </td>
-                <td style={{ padding: '7px 10px', color: T.muted, fontSize: 8 }}>{j.kellyPct ?? '-'}%</td>
-                <td style={{ padding: '7px 10px' }}>
-                  {j.autoClose
-                    ? <span title={j.closeReason ?? ''} style={{ fontSize: 7, padding: '2px 6px', borderRadius: 3, background: T.blue + '16', color: T.blue, border: `1px solid ${T.blue}44`, fontWeight: 700, cursor: 'help' }}>AUTO</span>
-                    : <span style={{ fontSize: 7, color: T.muted }}>Manual</span>}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+          {/* ── Pagination ──────────────────────────────────────────── */}
+          {totalPages > 1 && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, fontSize: 8, color: T.muted }}>
+              <span>
+                Showing {((safePage-1)*PER_PAGE)+1}–{Math.min(safePage*PER_PAGE, filtered.length)} of {filtered.length} trades
+              </span>
+              <div style={{ display: 'flex', gap: 4 }}>
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+                  <button
+                    key={p}
+                    onClick={() => setPage(p)}
+                    style={{
+                      width: 24, height: 24, borderRadius: 4, border: `1px solid ${T.border}`,
+                      background: p === safePage ? T.accent : 'transparent',
+                      color: p === safePage ? T.bg : T.muted,
+                      fontFamily: 'inherit', fontSize: 8, cursor: 'pointer', fontWeight: 700,
+                    }}
+                  >{p}</button>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

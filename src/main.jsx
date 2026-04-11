@@ -1,12 +1,4 @@
-// Polyfill for libraries that expect a Node `global` variable (e.g. sockjs-client).
-// This must run before any imports that may pull in those libraries.
-if (typeof global === 'undefined') {
-  // eslint-disable-next-line no-undef
-  window.global = window;
-}
-
 import { StrictMode, useEffect } from 'react';
-import ErrorBoundary from './ErrorBoundary';
 import { createRoot }            from 'react-dom/client';
 import { GoogleOAuthProvider }   from '@react-oauth/google';
 import { Toaster }               from 'react-hot-toast';
@@ -20,11 +12,11 @@ import PortfolioTab              from './pages/PortfolioTab';
 import AlertsTab                 from './pages/AlertsTab';
 import JournalTab                from './pages/JournalTab';
 import SettingsTab               from './pages/SettingsTab';
+import BacktestTab              from './pages/BacktestTab';
 import { T, fa, md }             from './utils/format';
 import { Auth }                  from './api/endpoints';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
-const DEBUG_RENDER = import.meta.env.VITE_DEBUG_RENDER === '1';
 
 const TABS = [
   { id: 'scanner',   label: s => `Scanner (${s.signals.filter(x => x.status === 'LIVE').length})` },
@@ -32,6 +24,7 @@ const TABS = [
   { id: 'portfolio', label: () => 'Portfolio' },
   { id: 'alerts',    label: s => `Alerts (${s.autoCloseLog.length})` },
   { id: 'journal',   label: s => `Journal (${s.journal.length})` },
+  { id: 'backtest',  label: () => 'Backtest' },
   { id: 'settings',  label: () => 'Settings' },
 ];
 
@@ -64,7 +57,7 @@ function AppShell() {
     return cl.length ? +((w.length / cl.length) * 100).toFixed(1) : 50;
   })();
 
-  const PAGE = { scanner: ScannerTab, trades: TradesTab, portfolio: PortfolioTab, alerts: AlertsTab, journal: JournalTab, settings: SettingsTab };
+  const PAGE = { scanner: ScannerTab, trades: TradesTab, portfolio: PortfolioTab, alerts: AlertsTab, journal: JournalTab, backtest: BacktestTab, settings: SettingsTab };
   const Page = PAGE[tab];
 
   return (
@@ -120,7 +113,7 @@ function AppShell() {
             padding: '12px 18px',
             borderBottom: `2px solid ${tab === t.id ? T.accent : 'transparent'}`,
             color: tab === t.id ? T.accent : T.muted,
-            background: 'transparent', borderWidth: 0,
+            background: 'transparent', border: 'none',
             fontFamily: 'inherit', fontSize: 9, cursor: 'pointer',
             textTransform: 'uppercase', letterSpacing: '0.07em',
             fontWeight: tab === t.id ? 700 : 400, transition: 'all .2s',
@@ -152,23 +145,11 @@ function App() {
   return <AppShell />;
 }
 
-if (DEBUG_RENDER) {
-  createRoot(document.getElementById('root')).render(
-    <StrictMode>
-      <div style={{ padding: 24, color: '#d8e8ff', background: '#010409', minHeight: '100vh', fontFamily: 'monospace' }}>
-        DEBUG RENDER — React mounted successfully.
-      </div>
-    </StrictMode>
-  );
-} else {
-  createRoot(document.getElementById('root')).render(
-    <StrictMode>
-      <ErrorBoundary>
-        <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-          <Toaster position="top-right" toastOptions={{ style: { background: '#080f1c', color: '#d8e8ff', border: '1px solid #0e1e35', fontFamily: 'monospace', fontSize: 12 } }} />
-          <App />
-        </GoogleOAuthProvider>
-      </ErrorBoundary>
-    </StrictMode>
-  );
-}
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+      <Toaster position="top-right" toastOptions={{ style: { background: '#080f1c', color: '#d8e8ff', border: '1px solid #0e1e35', fontFamily: 'monospace', fontSize: 12 } }} />
+      <App />
+    </GoogleOAuthProvider>
+  </StrictMode>
+);
