@@ -1,21 +1,22 @@
 import { useState } from 'react';
 import { Pill, ScoreRing, QualityBar } from './Atoms';
-import { T, fa, md, gc, fmtTime } from '../utils/format';
+import { T, fa, md, gc, fmtTime, priceDec, isIndianSignal, signalSource } from '../utils/format';
 import { Signals } from '../api/endpoints';
 import useStore from '../store/useStore';
 import toast from 'react-hot-toast';
-
-const dec = p => (p.includes('JPY') || p === 'XAU/USD' || p === 'NAS100') ? 2 : 4;
 
 export default function SignalCard({ sig, isNew }) {
   const [expanded, setExpanded] = useState(false);
   const [closing,  setClosing]  = useState(false);
   const closeSignalStore = useStore(s => s.closeSignal);
 
+  const dec        = priceDec(sig.pair);
   const col        = sig.isBull ? T.accent : T.red;
   const regColor   = sig.regime === 'trending' ? T.accent : sig.regime === 'volatile' ? T.red : T.yellow;
   const isClosed   = sig.status === 'CLOSED';
   const outcomeCol = sig.outcome === 'win' ? T.accent : sig.outcome === 'partial' ? T.yellow : sig.outcome === 'loss' ? T.red : T.muted;
+  const isIndia    = isIndianSignal(sig);
+  const source     = isIndia ? signalSource(sig) : null;
 
   async function handleClose(outcome) {
     setClosing(true);
@@ -43,24 +44,39 @@ export default function SignalCard({ sig, isNew }) {
     obSes: T.lime, closeConf: T.teal, pd: T.blue, volume: T.orange,
   };
 
+  // Display pair label — strip Yahoo suffixes for Indian stocks
+  const pairLabel = sig.pair
+    ?.replace('.NS', '').replace('.BO', '').replace('^', '') || sig.pair;
+
   return (
     <div
       onClick={() => setExpanded(e => !e)}
       style={{
         background: T.card,
-        border: `1px solid ${isNew ? T.accent : isClosed ? T.border + '88' : T.border}`,
+        border: `1px solid ${isNew ? T.accent : isClosed ? T.border + '88' : isIndia ? T.indigo + '55' : T.border}`,
         borderRadius: 12, padding: '12px 14px', cursor: 'pointer',
         opacity: isClosed ? 0.6 : 1,
         animation: isNew ? 'signalAppear .5s ease-out' : undefined,
         transition: 'border-color .4s, opacity .3s',
       }}
     >
-      {/* ── Header row ─────────────────────────────────────────────────── */}
+      {/* ── India / Chartink source badge ─────────────────────────── */}
+      {isIndia && source && (
+        <div style={{
+          fontSize: 7, color: T.indigo, fontWeight: 700,
+          marginBottom: 6, letterSpacing: '0.05em',
+        }}>
+          ⚡ {source}
+        </div>
+      )}
+
+      {/* ── Header row ─────────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
         <ScoreRing score={sig.score} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>{sig.pair}</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>{pairLabel}</span>
+            {isIndia && <Pill label="🇮🇳 NSE" color={T.indigo} sz={7} />}
             <Pill label={sig.isBull ? '▲ BUY' : '▼ SELL'} color={col} sz={9} />
             <Pill label={sig.grade} color={gc(sig.grade)} sz={9} />
             {isNew && <Pill label="NEW" color={T.accent} sz={8} />}
@@ -80,12 +96,12 @@ export default function SignalCard({ sig, isNew }) {
           <QualityBar score={sig.score} />
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: T.text }}>{sig.entry?.toFixed(dec(sig.pair))}</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: T.text }}>{sig.entry?.toFixed(dec)}</div>
           <div style={{ fontSize: 8, color: T.muted }}>Entry</div>
         </div>
       </div>
 
-      {/* ── Signal badges ──────────────────────────────────────────────── */}
+      {/* ── Signal badges ──────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: 4, marginTop: 8, flexWrap: 'wrap' }}>
         {sig.hasOB         && <Pill label="OB"           color={T.accent}  />}
         {sig.hasFVG        && <Pill label="FVG"          color={T.blue}    />}
@@ -101,15 +117,15 @@ export default function SignalCard({ sig, isNew }) {
         {sig.regime === 'ranging'  && <Pill label="⚠ Ranging" color={T.yellow} />}
       </div>
 
-      {/* ── Expanded detail ────────────────────────────────────────────── */}
+      {/* ── Expanded detail ────────────────────────────────────────── */}
       {expanded && (
         <div style={{ marginTop: 10, borderTop: `1px solid ${T.border}`, paddingTop: 10 }}>
 
           {/* SL / TP grid */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginBottom: 10 }}>
-            {[['SL', sig.sl?.toFixed(dec(sig.pair)), T.red],
-              ['TP1 (2R)', sig.tp1?.toFixed(dec(sig.pair)), T.accent],
-              ['TP2', sig.tp2?.toFixed(dec(sig.pair)), T.blue]].map(([l, v, c]) => (
+            {[['SL', sig.sl?.toFixed(dec), T.red],
+              ['TP1 (2R)', sig.tp1?.toFixed(dec), T.accent],
+              ['TP2', sig.tp2?.toFixed(dec), T.blue]].map(([l, v, c]) => (
               <div key={l} style={{ background: T.dim, borderRadius: 6, padding: '6px 8px' }}>
                 <div style={{ fontSize: 7, color: T.muted }}>{l}</div>
                 <div style={{ fontSize: 12, fontWeight: 700, color: c }}>{v}</div>
@@ -153,6 +169,17 @@ export default function SignalCard({ sig, isNew }) {
           {sig.htfLiqLabel && (
             <div style={{ fontSize: 8, color: T.blue, marginBottom: 8 }}>
               TP2 target: {sig.htfLiqLabel}
+            </div>
+          )}
+
+          {/* Source info for Indian signals */}
+          {isIndia && (
+            <div style={{ background: fa(T.indigo), border: `1px solid ${md(T.indigo)}`, borderRadius: 7, padding: '7px 10px', fontSize: 8, marginBottom: 8 }}>
+              <span style={{ color: T.indigo, fontWeight: 700 }}>🇮🇳 NSE SIGNAL — </span>
+              <span style={{ color: T.muted }}>
+                {source ? `Surfaced by Chartink alert: "${source}". ` : 'Surfaced by Yahoo screener. '}
+                Candle data from Yahoo Finance (.NS). ATR-based SL/TP applies.
+              </span>
             </div>
           )}
 

@@ -1,19 +1,45 @@
 import { useState, useMemo } from 'react';
 import { Backtest }          from '../api/endpoints';
-import { T, fa, md, gc, fmtDate, ALL_PAIRS } from '../utils/format';
+import { T, fa, md, gc, fmtDate, ALL_PAIRS, ALL_INDIA_PAIRS, INDIA_PAIRS_WATCH, PAIRS_WATCH } from '../utils/format';
 import toast                 from 'react-hot-toast';
 
 // ── tiny helpers ──────────────────────────────────────────────────────────
 const fmtPrice = (v, pair) => {
   if (v == null || isNaN(v)) return '–';
+  const isIndian = pair?.endsWith('.NS') || pair?.endsWith('.BO') || pair?.startsWith('^');
+  if (isIndian) return Number(v).toFixed(2);
   const dp = (pair?.includes('JPY') || pair === 'XAU/USD' || pair === 'NAS100') ? 2 : 4;
   return Number(v).toFixed(dp);
 };
 const pct = v => `${v >= 0 ? '+' : ''}${Number(v).toFixed(1)}%`;
-const money = v => `${v >= 0 ? '+' : ''}$${Math.abs(v).toFixed(2)}`;
+const money = (v, isIndian) => `${v >= 0 ? '+' : ''}${isIndian ? '₹' : '$'}${Math.abs(v).toFixed(2)}`;
 
 // ── palette shortcuts ─────────────────────────────────────────────────────
 const G = T.accent, R = T.red, B = T.blue, Y = T.yellow, M = T.muted;
+const INDIA_COLOR = '#6366f1';
+
+// ── MarketTabButton ───────────────────────────────────────────────────────
+function MarketTabButton({ active, onClick, children, color = G }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: '8px 20px',
+        borderRadius: 7,
+        border: `1px solid ${active ? color : T.border}`,
+        background: active ? fa(color) : 'transparent',
+        color: active ? color : M,
+        fontFamily: 'inherit',
+        fontSize: 10,
+        fontWeight: active ? 700 : 400,
+        cursor: 'pointer',
+        transition: 'all .15s',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
 
 // ── StatCard ──────────────────────────────────────────────────────────────
 function Stat({ label, value, color = T.text, sub }) {
@@ -40,7 +66,6 @@ function EquityChart({ curve, starting }) {
   const last  = curve[curve.length - 1];
   const color = last >= starting ? G : R;
 
-  // area fill
   const area = `M0,${scY(curve[0])} ` +
     curve.map((v, i) => `L${scX(i)},${scY(v)}`).join(' ') +
     ` L${W},${H} L0,${H} Z`;
@@ -55,7 +80,6 @@ function EquityChart({ curve, starting }) {
       </defs>
       <path d={area} fill="url(#btGrad)" />
       <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" />
-      {/* baseline */}
       <line x1="0" y1={scY(starting)} x2={W} y2={scY(starting)}
         stroke={M} strokeWidth="0.8" strokeDasharray="4 3" />
     </svg>
@@ -98,13 +122,13 @@ function CalibrationChart({ wins, losses }) {
 }
 
 // ── Trade table ───────────────────────────────────────────────────────────
-function TradeTable({ trades }) {
+function TradeTable({ trades, isIndian }) {
   const [page, setPage] = useState(1);
   const PER = 20;
   const total = Math.ceil(trades.length / PER);
   const rows  = trades.slice((page - 1) * PER, page * PER);
-
   const OUT_COL = { win: G, partial: Y, loss: R, timeout: M };
+  const currency = isIndian ? '₹' : '$';
 
   return (
     <div>
@@ -112,7 +136,7 @@ function TradeTable({ trades }) {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 9 }}>
           <thead style={{ background: T.dim }}>
             <tr>
-              {['DATE','PAIR','DIR','ENTRY','SL','TP1','SCORE','SESSION','REGIME','OUTCOME','P&L'].map(h => (
+              {['DATE', isIndian ? 'SYMBOL' : 'PAIR', 'DIR', isIndian ? `ENTRY (₹)` : 'ENTRY', 'SL', 'TP1', 'SCORE', 'SESSION', 'REGIME', 'OUTCOME', `P&L (${currency})`].map(h => (
                 <th key={h} style={{ padding: '6px 9px', fontSize: 7, color: M, textAlign: 'left', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
@@ -124,7 +148,11 @@ function TradeTable({ trades }) {
               return (
                 <tr key={k} style={{ borderBottom: `1px solid ${T.border}20` }}>
                   <td style={{ padding: '6px 9px', color: M, fontSize: 8 }}>{fmtDate(t.openedAt)}</td>
-                  <td style={{ padding: '6px 9px', fontWeight: 700 }}>{t.pair}</td>
+                  <td style={{ padding: '6px 9px', fontWeight: 700 }}>
+                    {isIndian
+                      ? t.pair?.replace('.NS','').replace('.BO','').replace('^','')
+                      : t.pair}
+                  </td>
                   <td style={{ padding: '6px 9px', color: t.isBull ? G : R, fontWeight: 700 }}>
                     {t.isBull ? '▲' : '▼'} {dir}
                   </td>
@@ -138,7 +166,7 @@ function TradeTable({ trades }) {
                     {(t.outcome ?? '–').toUpperCase()}
                   </td>
                   <td style={{ padding: '6px 9px', color: pc, fontWeight: 700 }}>
-                    {t.pnl != null ? money(t.pnl) : '–'}
+                    {t.pnl != null ? money(t.pnl, isIndian) : '–'}
                   </td>
                 </tr>
               );
@@ -163,8 +191,12 @@ function TradeTable({ trades }) {
 }
 
 // ── ResultCard ────────────────────────────────────────────────────────────
-function ResultCard({ r, onSelect, selected }) {
+function ResultCard({ r, onSelect, selected, isIndian }) {
   const good = r.totalPnl >= 0;
+  const currency = isIndian ? '₹' : '$';
+  const displayPair = isIndian
+    ? r.pair?.replace('.NS','').replace('.BO','').replace('^','')
+    : r.pair;
   return (
     <div
       onClick={() => onSelect(r)}
@@ -176,11 +208,13 @@ function ResultCard({ r, onSelect, selected }) {
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-        <span style={{ fontWeight: 700, fontSize: 11 }}>{r.pair}</span>
+        <span style={{ fontWeight: 700, fontSize: 11 }}>{displayPair}</span>
         <span style={{ fontSize: 8, color: M }}>{fmtDate(r.createdAt)}</span>
       </div>
       <div style={{ display: 'flex', gap: 12, fontSize: 9 }}>
-        <span style={{ color: good ? G : R, fontWeight: 700 }}>{money(r.totalPnl)}</span>
+        <span style={{ color: good ? G : R, fontWeight: 700 }}>
+          {good ? '+' : ''}{currency}{Math.abs(r.totalPnl).toFixed(2)}
+        </span>
         <span style={{ color: M }}>{r.winRate}% WR</span>
         <span style={{ color: M }}>{r.totalSignals} trades</span>
       </div>
@@ -188,12 +222,60 @@ function ResultCard({ r, onSelect, selected }) {
   );
 }
 
+// ── India info banner ─────────────────────────────────────────────────────
+function IndiaInfoBanner() {
+  return (
+    <div style={{
+      background: fa(INDIA_COLOR),
+      border: `1px solid ${INDIA_COLOR}44`,
+      borderRadius: 8, padding: '10px 14px',
+      fontSize: 9, color: M, lineHeight: 1.7,
+      marginBottom: 14,
+    }}>
+      <div style={{ color: INDIA_COLOR, fontWeight: 700, marginBottom: 4 }}>🇮🇳 INDIAN MARKET BACKTEST</div>
+      Same SMC engine · Yahoo Finance OHLCV data · 1h candles · NSE/BSE stocks &amp; indices ·
+      Prices in <strong style={{ color: T.text }}>₹ INR</strong> ·
+      Walk-forward, no look-ahead bias · Market hours: <strong style={{ color: T.text }}>9:15–15:30 IST</strong>
+    </div>
+  );
+}
+
+// ── Pair selector with groups ─────────────────────────────────────────────
+function GroupedPairSelect({ value, onChange, isIndian }) {
+  const groups = isIndian ? INDIA_PAIRS_WATCH : PAIRS_WATCH;
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)} style={{
+      height: 30, padding: '0 10px', borderRadius: 5,
+      background: T.dim, color: T.text, border: `1px solid ${T.border}`,
+      fontFamily: 'inherit', fontSize: 10, cursor: 'pointer', minWidth: 150,
+    }}>
+      {Object.entries(groups).map(([group, pairs]) => (
+        <optgroup key={group} label={group}>
+          {pairs.map(p => (
+            <option key={p} value={p}>
+              {isIndian ? p.replace('.NS','').replace('.BO','').replace('^','') : p}
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────
 export default function BacktestTab() {
+  // Market tab
+  const [marketTab, setMarketTab] = useState('forex'); // 'forex' | 'india'
+  const isIndian = marketTab === 'india';
+
   // Config
-  const [pair,     setPair]     = useState('EUR/USD');
+  const [forexPair, setForexPair] = useState('EUR/USD');
+  const [indiaPair, setIndiaPair] = useState('^NSEI');
+  const pair    = isIndian ? indiaPair : forexPair;
+  const setPair = isIndian ? setIndiaPair : setForexPair;
+
   const [bars,     setBars]     = useState(500);
-  const [balance,  setBalance]  = useState(10000);
+  const [balance,  setBalance]  = useState(isIndian ? 100000 : 10000);
   const [minScore, setMinScore] = useState(7);
 
   // UI state
@@ -206,8 +288,9 @@ export default function BacktestTab() {
   const [tradeTab, setTradeTab] = useState(false);
 
   const active = selHist ?? result;
+  const currency = isIndian ? '₹' : '$';
+  const accentColor = isIndian ? INDIA_COLOR : G;
 
-  // Load history once
   const loadHistory = async () => {
     try {
       const r = await Backtest.history();
@@ -219,7 +302,9 @@ export default function BacktestTab() {
     setRunning(true);
     setResult(null);
     setSelHist(null);
-    setProgress('Fetching historical candles…');
+    setProgress(isIndian
+      ? 'Fetching historical candles from Yahoo Finance India…'
+      : 'Fetching historical candles…');
     try {
       const r = await Backtest.run({ pair, barsBack: bars, startingBalance: balance, minScore });
       setResult(r.data);
@@ -244,28 +329,69 @@ export default function BacktestTab() {
     } catch { toast.error('Failed'); }
   };
 
-  // Render
+  // Filter history by active market tab
+  const filteredHistory = useMemo(() => {
+    return history.filter(r => {
+      const isInd = r.pair?.endsWith('.NS') || r.pair?.endsWith('.BO') || r.pair?.startsWith('^NSE') || r.pair?.startsWith('^BSE') || r.pair?.startsWith('^');
+      return isIndian ? isInd : !isInd;
+    });
+  }, [history, isIndian]);
+
+  // Switching tabs: reset result so stale forex result doesn't show on india tab
+  const handleTabSwitch = (tab) => {
+    setMarketTab(tab);
+    setResult(null);
+    setSelHist(null);
+    setTradeTab(false);
+    if (tab === 'india') setBalance(100000);
+    else setBalance(10000);
+  };
+
   return (
     <div>
 
+      {/* ── Market tab switcher ───────────────────────────────────────── */}
+      <div style={{
+        display: 'flex', gap: 8, marginBottom: 16,
+        borderBottom: `1px solid ${T.border}`, paddingBottom: 12,
+      }}>
+        <MarketTabButton
+          active={marketTab === 'forex'}
+          onClick={() => handleTabSwitch('forex')}
+          color={G}
+        >
+          💱 Forex / Crypto Backtest
+        </MarketTabButton>
+        <MarketTabButton
+          active={marketTab === 'india'}
+          onClick={() => handleTabSwitch('india')}
+          color={INDIA_COLOR}
+        >
+          🇮🇳 Indian Market Backtest
+        </MarketTabButton>
+      </div>
+
+      {/* India info banner */}
+      {isIndian && <IndiaInfoBanner />}
+
       {/* ── Config panel ─────────────────────────────────────────────── */}
       <div style={{
-        background: T.card, border: `1px solid ${T.border}`, borderRadius: 10,
+        background: T.card,
+        border: `1px solid ${isIndian ? INDIA_COLOR + '44' : T.border}`,
+        borderRadius: 10,
         padding: '14px 16px', marginBottom: 14,
       }}>
-        <div style={{ fontSize: 9, color: M, letterSpacing: '0.1em', marginBottom: 10 }}>BACKTEST CONFIGURATION</div>
+        <div style={{ fontSize: 9, color: M, letterSpacing: '0.1em', marginBottom: 10 }}>
+          {isIndian ? '🇮🇳 INDIAN MARKET BACKTEST CONFIGURATION' : 'BACKTEST CONFIGURATION'}
+        </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
 
-          {/* Pair */}
+          {/* Pair / Symbol */}
           <div>
-            <div style={{ fontSize: 7, color: M, marginBottom: 3, letterSpacing: '0.08em' }}>PAIR</div>
-            <select value={pair} onChange={e => setPair(e.target.value)} style={{
-              height: 30, padding: '0 10px', borderRadius: 5,
-              background: T.dim, color: T.text, border: `1px solid ${T.border}`,
-              fontFamily: 'inherit', fontSize: 10, cursor: 'pointer', minWidth: 110,
-            }}>
-              {ALL_PAIRS.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
+            <div style={{ fontSize: 7, color: M, marginBottom: 3, letterSpacing: '0.08em' }}>
+              {isIndian ? 'SYMBOL' : 'PAIR'}
+            </div>
+            <GroupedPairSelect value={pair} onChange={setPair} isIndian={isIndian} />
           </div>
 
           {/* Bars back */}
@@ -285,12 +411,16 @@ export default function BacktestTab() {
 
           {/* Starting balance */}
           <div>
-            <div style={{ fontSize: 7, color: M, marginBottom: 3, letterSpacing: '0.08em' }}>STARTING BALANCE ($)</div>
+            <div style={{ fontSize: 7, color: M, marginBottom: 3, letterSpacing: '0.08em' }}>
+              STARTING BALANCE ({currency})
+            </div>
             <input type="number" value={balance}
               onChange={e => setBalance(Number(e.target.value))}
-              min={100} max={1000000} step={1000}
+              min={isIndian ? 10000 : 100}
+              max={isIndian ? 100000000 : 1000000}
+              step={isIndian ? 10000 : 1000}
               style={{
-                height: 30, width: 100, padding: '0 8px', borderRadius: 5,
+                height: 30, width: 120, padding: '0 8px', borderRadius: 5,
                 background: T.dim, color: T.text, border: `1px solid ${T.border}`,
                 fontFamily: 'inherit', fontSize: 10,
               }}
@@ -317,9 +447,9 @@ export default function BacktestTab() {
             disabled={running}
             style={{
               height: 30, padding: '0 20px', borderRadius: 5,
-              background: running ? T.dim : fa(G) + '66',
-              color: running ? M : G,
-              border: `1px solid ${running ? T.border : G + '55'}`,
+              background: running ? T.dim : fa(accentColor) + '66',
+              color: running ? M : accentColor,
+              border: `1px solid ${running ? T.border : accentColor + '55'}`,
               fontFamily: 'inherit', fontSize: 10, fontWeight: 700,
               cursor: running ? 'not-allowed' : 'pointer', letterSpacing: '0.05em',
             }}
@@ -341,21 +471,25 @@ export default function BacktestTab() {
         </div>
 
         {running && progress && (
-          <div style={{ marginTop: 10, fontSize: 8, color: B }}>⟳ {progress}</div>
+          <div style={{ marginTop: 10, fontSize: 8, color: isIndian ? INDIA_COLOR : B }}>⟳ {progress}</div>
         )}
         <div style={{ marginTop: 8, fontSize: 8, color: M }}>
-          Walk-forward simulation · same SMC engine as live scanner · Kelly sizing · no look-ahead bias
+          {isIndian
+            ? 'Walk-forward simulation · Yahoo Finance India OHLCV data · same SMC engine as live scanner · Kelly sizing · no look-ahead bias'
+            : 'Walk-forward simulation · same SMC engine as live scanner · Kelly sizing · no look-ahead bias'}
         </div>
       </div>
 
       {/* ── History panel ────────────────────────────────────────────── */}
-      {showHist && history.length > 0 && (
+      {showHist && filteredHistory.length > 0 && (
         <div style={{
           background: T.card, border: `1px solid ${T.border}`, borderRadius: 10,
           padding: '14px 16px', marginBottom: 14,
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <div style={{ fontSize: 9, color: M, letterSpacing: '0.1em' }}>SAVED RESULTS ({history.length})</div>
+            <div style={{ fontSize: 9, color: M, letterSpacing: '0.1em' }}>
+              {isIndian ? '🇮🇳 INDIAN MARKET RESULTS' : 'SAVED RESULTS'} ({filteredHistory.length})
+            </div>
             <button onClick={clearHistory} style={{
               fontSize: 8, color: R, background: 'transparent',
               border: `1px solid ${R}44`, borderRadius: 4,
@@ -363,32 +497,49 @@ export default function BacktestTab() {
             }}>Clear all</button>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 8 }}>
-            {history.map(r => (
-              <ResultCard key={r.id} r={r} selected={selHist?.id === r.id}
-                onSelect={r => { setSelHist(r); setResult(null); setTradeTab(false); }} />
+            {filteredHistory.map(r => (
+              <ResultCard
+                key={r.id} r={r}
+                selected={selHist?.id === r.id}
+                onSelect={r => { setSelHist(r); setResult(null); setTradeTab(false); }}
+                isIndian={isIndian}
+              />
             ))}
           </div>
+        </div>
+      )}
+
+      {showHist && filteredHistory.length === 0 && history.length > 0 && (
+        <div style={{
+          background: T.card, border: `1px solid ${T.border}`, borderRadius: 10,
+          padding: '20px', marginBottom: 14, textAlign: 'center', color: M, fontSize: 9,
+        }}>
+          No {isIndian ? 'Indian market' : 'Forex'} backtest history yet.
+          Switch to the {isIndian ? 'Forex' : 'Indian Market'} tab to see those results.
         </div>
       )}
 
       {/* ── Result display ───────────────────────────────────────────── */}
       {active && (
         <div>
-
-          {/* Header */}
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             marginBottom: 12,
           }}>
             <div>
               <div style={{ fontSize: 13, fontWeight: 700 }}>
-                <span style={{ color: active.totalPnl >= 0 ? G : R }}>{active.pair}</span>
+                <span style={{ color: active.totalPnl >= 0 ? G : R }}>
+                  {isIndian
+                    ? active.pair?.replace('.NS','').replace('.BO','').replace('^','')
+                    : active.pair}
+                </span>
                 <span style={{ color: M, fontSize: 9, marginLeft: 8 }}>
                   {active.range} · {active.interval} · min score {minScore}
+                  {isIndian && ' · NSE/BSE'}
                 </span>
               </div>
               <div style={{ fontSize: 8, color: M, marginTop: 2 }}>
-                Starting ${active.startingBalance?.toLocaleString()} · {active.totalSignals} signals detected
+                Starting {currency}{active.startingBalance?.toLocaleString()} · {active.totalSignals} signals detected
               </div>
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
@@ -415,13 +566,13 @@ export default function BacktestTab() {
             <>
               {/* Stats row */}
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
-                <Stat label="FINAL BALANCE"
-                  value={`$${active.finalBalance?.toLocaleString()}`}
+                <Stat label={`FINAL BALANCE (${currency})`}
+                  value={`${currency}${active.finalBalance?.toLocaleString()}`}
                   color={active.finalBalance >= active.startingBalance ? G : R}
                   sub={`${pct((active.finalBalance - active.startingBalance) / active.startingBalance * 100)} return`}
                 />
-                <Stat label="TOTAL P&L"
-                  value={money(active.totalPnl)}
+                <Stat label={`TOTAL P&L (${currency})`}
+                  value={(active.totalPnl >= 0 ? '+' : '') + currency + Math.abs(active.totalPnl).toFixed(2)}
                   color={active.totalPnl >= 0 ? G : R}
                 />
                 <Stat label="WIN RATE"
@@ -450,13 +601,15 @@ export default function BacktestTab() {
                 background: T.card, border: `1px solid ${T.border}`, borderRadius: 10,
                 padding: '14px 16px', marginBottom: 14,
               }}>
-                <div style={{ fontSize: 8, color: M, letterSpacing: '0.08em', marginBottom: 10 }}>EQUITY CURVE</div>
+                <div style={{ fontSize: 8, color: M, letterSpacing: '0.08em', marginBottom: 10 }}>
+                  EQUITY CURVE {isIndian ? '(₹ INR)' : '($)'}
+                </div>
                 <EquityChart curve={active.equityCurve} starting={active.startingBalance} />
                 {active.equityCurve && (
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 7, color: M, marginTop: 4 }}>
-                    <span>Start: ${active.startingBalance?.toLocaleString()}</span>
+                    <span>Start: {currency}{active.startingBalance?.toLocaleString()}</span>
                     <span style={{ color: active.finalBalance >= active.startingBalance ? G : R }}>
-                      End: ${active.finalBalance?.toLocaleString()}
+                      End: {currency}{active.finalBalance?.toLocaleString()}
                     </span>
                   </div>
                 )}
@@ -471,18 +624,18 @@ export default function BacktestTab() {
                   <CalibrationChart wins={active.scoreWins} losses={active.scoreLosses} />
                   <div style={{ fontSize: 8, color: M, marginTop: 8 }}>
                     Higher score bands should have higher win rates — use this to tune your min score threshold
+                    {isIndian && ' for Indian stocks'}
                   </div>
                 </div>
               )}
             </>
           ) : (
-            /* Trade table */
             <div style={{
               background: T.card, border: `1px solid ${T.border}`, borderRadius: 10,
               padding: '14px 16px',
             }}>
               {active.trades?.length > 0
-                ? <TradeTable trades={active.trades} />
+                ? <TradeTable trades={active.trades} isIndian={isIndian} />
                 : <div style={{ textAlign: 'center', padding: 40, color: M }}>No trades in this backtest</div>
               }
             </div>
@@ -493,11 +646,24 @@ export default function BacktestTab() {
       {/* Empty state */}
       {!active && !running && (
         <div style={{ textAlign: 'center', padding: 60, color: M }}>
-          <div style={{ fontSize: 20, marginBottom: 10 }}>📊</div>
-          <div style={{ fontSize: 11, marginBottom: 6 }}>Configure and run a backtest above</div>
+          <div style={{ fontSize: 20, marginBottom: 10 }}>{isIndian ? '🇮🇳' : '📊'}</div>
+          <div style={{ fontSize: 11, marginBottom: 6 }}>
+            {isIndian
+              ? 'Configure and run an Indian market backtest above'
+              : 'Configure and run a backtest above'}
+          </div>
           <div style={{ fontSize: 9 }}>
-            The same SMC analysis engine used for live signals runs on historical data<br />
-            in walk-forward mode — no look-ahead bias
+            {isIndian
+              ? <>
+                  The same SMC analysis engine scans NSE/BSE stocks &amp; indices using<br />
+                  Yahoo Finance India OHLCV data in walk-forward mode — no look-ahead bias.<br />
+                  Prices are in ₹ INR. Try starting with <strong style={{ color: T.text }}>^NSEI</strong> or a large-cap like <strong style={{ color: T.text }}>RELIANCE</strong>.
+                </>
+              : <>
+                  The same SMC analysis engine used for live signals runs on historical data<br />
+                  in walk-forward mode — no look-ahead bias
+                </>
+            }
           </div>
         </div>
       )}

@@ -19,7 +19,7 @@ const useStore = create((set, get) => ({
   setSignals: (signals) => set({ signals }),
   addSignal:  (sig) => {
     set(s => ({
-      signals:   [sig, ...s.signals.filter(x => x.id !== sig.id)].slice(0, 40),
+      signals:   [sig, ...s.signals.filter(x => x.id !== sig.id)].slice(0, 60),
       newSigIds: new Set([...s.newSigIds, sig.id]),
     }));
     setTimeout(() => set(s => {
@@ -58,20 +58,31 @@ const useStore = create((set, get) => ({
     scanInterval: 60,
     alertScore:   6,
     maxSignals:   20,
-    watchPairs:   [
+    watchPairs: [
       'EUR/USD','GBP/USD','USD/JPY','USD/CHF','AUD/USD','USD/CAD','NZD/USD',
       'EUR/GBP','EUR/JPY','GBP/JPY','EUR/AUD','AUD/JPY','CAD/JPY',
       'XAU/USD','NAS100',
     ],
   },
-  setSettings: (settings) => set({ settings }),
-  patchSettings: (patch) => set(s => ({ settings: { ...s.settings, ...patch } })),
+  setSettings:   (settings) => set({ settings }),
+  patchSettings: (patch)    => set(s => ({ settings: { ...s.settings, ...patch } })),
+
+  // ── India / Chartink state ────────────────────────────────────────────
+  chartinkCandidates: [],          // live pool from /api/chartink/candidates
+  chartinkMarketOpen: false,
+  setChartinkCandidates: (candidates, marketOpen) =>
+    set({ chartinkCandidates: candidates, chartinkMarketOpen: marketOpen }),
 
   // ── UI ────────────────────────────────────────────────────────────────
   tab:    'scanner',
   setTab: (tab) => set({ tab }),
   scanning: false,
   setScanning: (scanning) => set({ scanning }),
+
+  // ── Market mode toggle ───────────────────────────────────────────────
+  // 'forex' | 'india' | 'all'
+  marketMode: 'all',
+  setMarketMode: (marketMode) => set({ marketMode }),
 }));
 
 export default useStore;

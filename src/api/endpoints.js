@@ -6,9 +6,9 @@ export const Auth = {
 };
 
 export const Signals = {
-  live:        ()           => api.get('/signals'),
-  all:         ()           => api.get('/signals/all'),
-  close:       (id, outcome)=> api.patch(`/signals/${id}/close`, { outcome }),
+  live:        ()            => api.get('/signals'),
+  all:         ()            => api.get('/signals/all'),
+  close:       (id, outcome) => api.patch(`/signals/${id}/close`, { outcome }),
 };
 
 export const Journal = {
@@ -28,7 +28,7 @@ export const Journal = {
     if (from) p.set('from', from.toISOString());
     if (to)   p.set('to',   to.toISOString());
     const token = localStorage.getItem('smc_token');
-    if (token) p.set('_token', token); // backend ignores; we'll use fetch
+    if (token) p.set('_token', token);
     return { url: base + (p.toString() ? '?' + p.toString() : ''), token };
   },
 };
@@ -43,4 +43,13 @@ export const Backtest = {
   run:     (params) => api.post('/backtest', params),
   history: ()       => api.get('/backtest'),
   clear:   ()       => api.delete('/backtest'),
+};
+
+// ── Chartink / Indian market endpoints ───────────────────────────────────
+export const Chartink = {
+  /** Returns current dynamic candidate pool for display in IndiaTab */
+  candidates: () => api.get('/chartink/candidates'),
+
+  /** Health check — verify webhook URL is reachable */
+  ping:       () => api.get('/chartink/webhook/ping'),
 };
