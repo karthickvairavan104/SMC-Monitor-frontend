@@ -3,6 +3,10 @@
     {
       "source": "/api/(.*)",
       "destination": "http://140.245.197.178/api/$1"
+    },
+    {
+      "source": "/ws/(.*)",
+      "destination": "http://140.245.197.178/ws/$1"
     }
   ]
 }
