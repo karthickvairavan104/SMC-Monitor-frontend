@@ -329,8 +329,8 @@ export default function JournalTab() {
       _setupType: getSetupType(j),
     }));
 
-    if (fromDate)  rows = rows.filter(j => new Date(j.createdAt) >= fromDate);
-    if (toDate)    rows = rows.filter(j => new Date(j.createdAt) <= toDate);
+    if (fromDate)  rows = rows.filter(j => new Date(j.entryTime || j.createdAt) >= fromDate);
+    if (toDate)    rows = rows.filter(j => new Date(j.entryTime || j.createdAt) <= toDate);
     if (dirF)      rows = rows.filter(j => (j.isBull ? 'BUY' : 'SELL') === dirF);
     if (outF)      rows = rows.filter(j => j.outcome === outF);
     if (pairF)     rows = rows.filter(j => j.pair === pairF);
@@ -344,7 +344,7 @@ export default function JournalTab() {
     rows.sort((a, b) => {
       let av, bv;
       switch (sortCol) {
-        case 'date':     av = new Date(a.createdAt).getTime(); bv = new Date(b.createdAt).getTime(); break;
+        case 'date':     av = new Date(a.entryTime || a.createdAt).getTime(); bv = new Date(b.entryTime || b.createdAt).getTime(); break;
         case 'entry_t':  av = new Date(a.entryTime||a.createdAt).getTime(); bv = new Date(b.entryTime||b.createdAt).getTime(); break;
         case 'exit_t':   av = new Date(a.closedAt||0).getTime(); bv = new Date(b.closedAt||0).getTime(); break;
         case 'pair':     av = a.pair;     bv = b.pair;     break;
